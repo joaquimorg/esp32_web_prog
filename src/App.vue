@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ESPLoader, Transport } from 'esptool-js'
 import { md5 } from './lib/md5'
+import { loadJson, saveJson } from './lib/storage'
 import {
   bootloaderOffset, FLASH_FREQ_OPTIONS, FLASH_MODE_OPTIONS, FLASH_SIZE_OPTIONS,
   binaryStringToBytes, bytesToBinaryString, flashSizeLabel, flashSizeToBytes, patchImageHeader
@@ -944,7 +945,37 @@ function clearConsole() {
   addLog(lang.value === 'pt' ? 'Consola limpa.' : 'Console cleared.', 'system')
 }
 
+// Settings remembered between visits
+const SETTINGS_KEY = 'esp-studio-settings'
+const BAUD_RATES = [115200, 921600, 460800, 230400, 74880, 9600]
+const LINE_ENDINGS = lineEndingOptions.value.map(o => o.value)
+const persistedSettings = {
+  baudRate, lineEnding, showTimestamps, autoScroll,
+  flashMode, flashFreq, flashSize, verifyAfterFlash, monitorAfterFlash
+}
+const settingValid = {
+  baudRate: (v) => BAUD_RATES.includes(v),
+  lineEnding: (v) => LINE_ENDINGS.includes(v),
+  flashMode: (v) => FLASH_MODE_OPTIONS.includes(v),
+  flashFreq: (v) => FLASH_FREQ_OPTIONS.includes(v),
+  flashSize: (v) => FLASH_SIZE_OPTIONS.includes(v)
+}
+
+function loadSettings() {
+  const saved = loadJson(SETTINGS_KEY, {})
+  for (const [key, target] of Object.entries(persistedSettings)) {
+    if (!(key in saved)) continue
+    const check = settingValid[key]
+    if (check ? check(saved[key]) : typeof saved[key] === 'boolean') target.value = saved[key]
+  }
+}
+
+watch(Object.values(persistedSettings), () => {
+  saveJson(SETTINGS_KEY, Object.fromEntries(Object.entries(persistedSettings).map(([k, r]) => [k, r.value])))
+})
+
 onMounted(() => {
+  loadSettings()
   const savedTheme = localStorage.getItem('esp-studio-theme')
   if (savedTheme) {
     dark.value = savedTheme === 'dark'
