@@ -4,6 +4,8 @@ import { ESPLoader, Transport } from 'esptool-js'
 import { md5 } from './lib/md5'
 import { loadJson, saveJson } from './lib/storage'
 import SerialPlotter from './components/SerialPlotter.vue'
+import ToolsView from './components/ToolsView.vue'
+import { formatBytes, readFileBytes } from './lib/files'
 import { createPlotterStore } from './lib/plotter'
 import { classifyLine, highlightParts, matchesLevel, matchesText } from './lib/logs'
 import {
@@ -16,7 +18,7 @@ const dark = ref(true)
 const lang = ref('pt') // 'pt' (PT-PT) | 'en'
 
 // Navigation
-const activeView = ref('programmer') // 'programmer' | 'console' | 'guide'
+const activeView = ref('programmer') // 'programmer' | 'console' | 'tools' | 'guide'
 
 // Serial Connection
 const port = ref(null)
@@ -169,6 +171,7 @@ const t = computed(() => {
       navProgrammer: 'Programador',
       navConsole: 'Consola Serial',
       navGuide: 'Guia & Pinagem',
+      navTools: 'Ferramentas',
       webSerialSupport: 'Web Serial suportada',
       webSerialNoSupport: 'Navegador incompatível',
       connected: 'Ligado',
@@ -229,6 +232,7 @@ const t = computed(() => {
     navProgrammer: 'Programmer',
     navConsole: 'Serial Console',
     navGuide: 'Guide & Pinout',
+    navTools: 'Tools',
     webSerialSupport: 'Web Serial supported',
     webSerialNoSupport: 'Browser unsupported',
     connected: 'Connected',
@@ -712,12 +716,6 @@ async function enterBootloaderMode() {
 
 let fileSeq = 0
 
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
-}
-
 function parseAddress(text) {
   const value = String(text).trim()
   if (!/^(0x[0-9a-f]+|\d+)$/i.test(value)) return NaN
@@ -894,6 +892,25 @@ async function reopenMonitor() {
   }
 }
 
+// Runs a bootloader task started from the Tools page and brings the monitor back afterwards.
+// Resolves to true when the task finished without errors.
+async function runBoardTask(task) {
+  if (!connected.value) {
+    addLog(lang.value === 'pt' ? 'Ligue uma placa antes de usar esta ferramenta.' : 'Connect a board before using this tool.', 'error')
+    return false
+  }
+  let ok = false
+  try {
+    await runWithLoader(task)
+    ok = true
+  } catch (err) {
+    addLog(`${lang.value === 'pt' ? 'Erro' : 'Error'}: ${err.message}`, 'error')
+  }
+  connected.value = false
+  if (monitorAfterFlash.value) await reopenMonitor()
+  return ok
+}
+
 async function eraseFullFlash() {
   if (!connected.value) {
     addLog(lang.value === 'pt' ? 'Ligue o ESP32 antes de formatar a memória Flash.' : 'Connect your ESP32 before erasing flash.', 'error')
@@ -925,10 +942,6 @@ async function eraseFullFlash() {
   } finally {
     isErasing.value = false
   }
-}
-
-async function readFileBytes(file) {
-  return new Uint8Array(await file.arrayBuffer())
 }
 
 async function flash() {
@@ -1160,6 +1173,17 @@ onBeforeUnmount(() => {
 
           <button
             class="nav-item"
+            :class="{ active: activeView === 'tools' }"
+            @click="activeView = 'tools'"
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+            </svg>
+            <span>{{ t.navTools }}</span>
+          </button>
+
+          <button
+            class="nav-item"
             :class="{ active: activeView === 'guide' }"
             @click="activeView = 'guide'"
           >
@@ -1216,7 +1240,7 @@ onBeforeUnmount(() => {
             <span class="crumb-root">ESP Studio</span>
             <span class="crumb-separator">/</span>
             <span class="crumb-current">
-              {{ activeView === 'programmer' ? t.navProgrammer : activeView === 'console' ? t.navConsole : t.navGuide }}
+              {{ activeView === 'programmer' ? t.navProgrammer : activeView === 'console' ? t.navConsole : activeView === 'tools' ? t.navTools : t.navGuide }}
             </span>
           </div>
 
@@ -1956,6 +1980,11 @@ onBeforeUnmount(() => {
               </button>
             </form>
           </div>
+        </div>
+
+        <!-- VIEW: TOOLS -->
+        <div v-else-if="activeView === 'tools'" class="view-content fade-in">
+          <ToolsView :connected="connected" :lang="lang" :chip="chipType" :run="runBoardTask" :log="addLog" />
         </div>
 
         <!-- VIEW: GUIDE & PINOUT -->
