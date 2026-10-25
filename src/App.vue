@@ -67,6 +67,13 @@ const logFilter = ref('')
 const logLevel = ref('all') // 'all' | 'warn' | 'error'
 const MAX_LOG_LINES = 5000
 
+// Quick commands (user editable, remembered between visits)
+const MACROS_KEY = 'esp-studio-macros'
+const DEFAULT_MACROS = ['help', 'restart', 'status', 'ping', 'AT']
+const quickCommands = ref(DEFAULT_MACROS.slice())
+const editingMacros = ref(false)
+const macroDraft = ref('')
+
 // Custom Line Ending Dropdown
 const showEndingMenu = ref(false)
 const endingDropdownRef = ref(null)
@@ -94,6 +101,21 @@ const currentLineEndingLabel = computed(() => {
   if (lineEnding.value === '\r') return 'CR (\\r)'
   return lang.value === 'pt' ? 'Nenhum' : 'None'
 })
+
+function addMacro() {
+  const cmd = macroDraft.value.trim()
+  if (!cmd || quickCommands.value.includes(cmd)) return
+  quickCommands.value.push(cmd)
+  macroDraft.value = ''
+}
+
+function removeMacro(cmd) {
+  quickCommands.value = quickCommands.value.filter(c => c !== cmd)
+}
+
+function resetMacros() {
+  quickCommands.value = DEFAULT_MACROS.slice()
+}
 
 function selectEnding(val) {
   lineEnding.value = val
@@ -976,6 +998,8 @@ const settingValid = {
 }
 
 function loadSettings() {
+  const macros = loadJson(MACROS_KEY, null)
+  if (Array.isArray(macros)) quickCommands.value = macros.filter(c => typeof c === 'string' && c.trim())
   const saved = loadJson(SETTINGS_KEY, {})
   for (const [key, target] of Object.entries(persistedSettings)) {
     if (!(key in saved)) continue
@@ -983,6 +1007,8 @@ function loadSettings() {
     if (check ? check(saved[key]) : typeof saved[key] === 'boolean') target.value = saved[key]
   }
 }
+
+watch(quickCommands, (list) => saveJson(MACROS_KEY, list), { deep: true })
 
 watch(Object.values(persistedSettings), () => {
   saveJson(SETTINGS_KEY, Object.fromEntries(Object.entries(persistedSettings).map(([k, r]) => [k, r.value])))
@@ -1791,11 +1817,19 @@ onBeforeUnmount(() => {
             <!-- Macro Commands Bar -->
             <div class="quick-macros">
               <span class="macro-label">{{ t.quickCommands }}</span>
-              <button class="macro-chip" @click="sendCommand('help')" :disabled="!connected">help</button>
-              <button class="macro-chip" @click="sendCommand('restart')" :disabled="!connected">restart</button>
-              <button class="macro-chip" @click="sendCommand('status')" :disabled="!connected">status</button>
-              <button class="macro-chip" @click="sendCommand('ping')" :disabled="!connected">ping</button>
-              <button class="macro-chip" @click="sendCommand('AT')" :disabled="!connected">AT</button>
+              <span v-for="cmd in quickCommands" :key="cmd" class="macro-item">
+                <button class="macro-chip" @click="editingMacros ? removeMacro(cmd) : sendCommand(cmd)" :disabled="!editingMacros && !connected" :title="editingMacros ? (lang === 'pt' ? 'Remover' : 'Remove') : cmd">
+                  {{ cmd }}<span v-if="editingMacros" class="macro-remove" aria-hidden="true">×</span>
+                </button>
+              </span>
+              <form v-if="editingMacros" class="macro-add" @submit.prevent="addMacro">
+                <input v-model="macroDraft" class="mono-font" :placeholder="lang === 'pt' ? 'novo comando' : 'new command'" spellcheck="false" />
+                <button type="submit" class="macro-chip" :disabled="!macroDraft.trim()">+</button>
+                <button type="button" class="macro-chip" @click="resetMacros">{{ lang === 'pt' ? 'Repor' : 'Reset' }}</button>
+              </form>
+              <button class="macro-chip" :class="{ active: editingMacros }" @click="editingMacros = !editingMacros">
+                {{ editingMacros ? (lang === 'pt' ? 'Concluir' : 'Done') : (lang === 'pt' ? 'Editar' : 'Edit') }}
+              </button>
               <button class="macro-chip reset" @click="hardwareReset" :disabled="!connected">RTS/DTR Reset</button>
             </div>
 

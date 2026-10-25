@@ -2981,3 +2981,29 @@ select option {
   .console-filterbar { flex-wrap: wrap; }
   .filter-search { flex-basis: 100%; }
 }
+
+/* ==========================================================================
+   EDITABLE QUICK COMMANDS
+   ========================================================================== */
+.macro-item { display: inline-flex; }
+.macro-chip.active { border-color: var(--border-active); color: var(--accent-emerald-light); }
+.macro-remove { margin-left: 6px; color: var(--accent-rose); font-weight: 700; }
+
+.macro-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.macro-add input {
+  width: 130px;
+  padding: 5px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  font-size: 0.75rem;
+  outline: none;
+}
+
+.macro-add input:focus { border-color: var(--border-focus); }
