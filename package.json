@@ -2,6 +2,8 @@
   "name": "esp-studio",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
+  "author": "joaquim.org",
   "type": "module",
   "scripts": {
     "dev": "vite",
