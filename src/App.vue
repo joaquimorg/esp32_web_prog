@@ -51,6 +51,7 @@ const flashMode = ref('keep')
 const flashFreq = ref('keep')
 const flashSize = ref('keep')
 const verifyAfterFlash = ref(true)
+const monitorAfterFlash = ref(true)
 const showFlashOptions = ref(false)
 
 // Serial Console
@@ -769,6 +770,25 @@ async function runWithLoader(task) {
   }
 }
 
+// Re-opens the serial monitor once the bootloader session is over and the board has rebooted
+async function reopenMonitor() {
+  await new Promise(r => setTimeout(r, 400))
+  try {
+    await port.value.open({ baudRate: Number(baudRate.value) })
+    writer = port.value.writable?.getWriter()
+    connected.value = true
+    addLog(lang.value === 'pt' ? `Monitor serial reaberto @ ${baudRate.value} baud.` : `Serial monitor reopened @ ${baudRate.value} baud.`, 'success')
+    readSerial()
+    return true
+  } catch (err) {
+    connected.value = false
+    addLog(lang.value === 'pt'
+      ? `Não foi possível reabrir a porta (${err.message}). Volte a ligar a placa para continuar.`
+      : `Could not reopen the port (${err.message}). Reconnect the board to continue.`, 'muted')
+    return false
+  }
+}
+
 async function eraseFullFlash() {
   if (!connected.value) {
     addLog(lang.value === 'pt' ? 'Ligue o ESP32 antes de formatar a memória Flash.' : 'Connect your ESP32 before erasing flash.', 'error')
@@ -788,6 +808,7 @@ async function eraseFullFlash() {
     })
 
     connected.value = false
+    if (monitorAfterFlash.value) await reopenMonitor()
     progress.value = 100
     flashStatusText.value = lang.value === 'pt' ? 'Memória flash totalmente limpa!' : 'Flash memory completely erased!'
     addLog(lang.value === 'pt' ? '✓ Memória Flash apagada com sucesso! A placa foi reposta ao estado de fábrica limpo.' : '✓ Flash memory erased successfully! Board reset to clean factory state.', 'success')
@@ -795,6 +816,7 @@ async function eraseFullFlash() {
     connected.value = false
     flashStatusText.value = lang.value === 'pt' ? 'Falha na formatação.' : 'Erase failed.'
     addLog(`${lang.value === 'pt' ? 'Erro na limpeza da flash' : 'Erase error'}: ${err.message}`, 'error')
+    if (monitorAfterFlash.value) await reopenMonitor()
   } finally {
     isErasing.value = false
   }
@@ -892,6 +914,7 @@ async function flash() {
     })
 
     connected.value = false
+    if (monitorAfterFlash.value && await reopenMonitor()) activeView.value = 'console'
     progress.value = 100
     flashStatusText.value = lang.value === 'pt' ? 'Gravação concluída com sucesso!' : 'Flash completed successfully!'
     addLog(lang.value === 'pt' ? `✓ ${entries.length} ficheiro(s) gravado(s) com sucesso!` : `✓ ${entries.length} file(s) flashed successfully!`, 'success')
@@ -899,6 +922,7 @@ async function flash() {
     connected.value = false
     flashStatusText.value = lang.value === 'pt' ? 'Falha na gravação.' : 'Flashing failed.'
     addLog(`${lang.value === 'pt' ? 'Erro na gravação' : 'Flashing failed'}: ${error.message}`, 'error')
+    if (monitorAfterFlash.value) await reopenMonitor()
   } finally {
     isFlashing.value = false
   }
@@ -1516,6 +1540,10 @@ onBeforeUnmount(() => {
                     <label class="check-row">
                       <input type="checkbox" v-model="verifyAfterFlash" />
                       <span>{{ lang === 'pt' ? 'Verificar MD5 após gravar' : 'Verify MD5 after flashing' }}</span>
+                    </label>
+                    <label class="check-row">
+                      <input type="checkbox" v-model="monitorAfterFlash" />
+                      <span>{{ lang === 'pt' ? 'Voltar a ligar e abrir o monitor serial após gravar' : 'Reconnect and open the serial monitor after flashing' }}</span>
                     </label>
                     <p class="form-hint">{{ lang === 'pt' ? 'Modo, frequência e tamanho só alteram o cabeçalho de um bootloader gravado no seu endereço de arranque. Com "Manter" o ficheiro é gravado tal como está.' : 'Mode, frequency and size only rewrite the header of a bootloader written at its boot address. "Keep" writes the file untouched.' }}</p>
                   </div>
