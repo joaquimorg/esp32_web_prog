@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ESPLoader, Transport } from 'esptool-js'
 import { md5 } from './lib/md5'
 import {
-  FLASH_FREQ_OPTIONS, FLASH_MODE_OPTIONS, FLASH_SIZE_OPTIONS,
+  bootloaderOffset, FLASH_FREQ_OPTIONS, FLASH_MODE_OPTIONS, FLASH_SIZE_OPTIONS,
   binaryStringToBytes, bytesToBinaryString, flashSizeLabel, flashSizeToBytes, patchImageHeader
 } from './lib/flashimage'
 
@@ -39,11 +39,10 @@ const boardInfo = ref({
 const copiedMac = ref(false)
 
 // Firmware Flashing & Presets
-const firmware = ref(null)
+const firmwareFiles = ref([]) // [{ id, file, address }]
 const firmwareSource = ref('custom') // 'custom' | 'presets'
 const selectedPresetId = ref(null)
 const isDragging = ref(false)
-const flashAddress = ref('0x10000')
 const progress = ref(0)
 const isFlashing = ref(false)
 const isErasing = ref(false)
@@ -239,14 +238,6 @@ const connectionLabel = computed(() => {
   return t.value.connected
 })
 
-const fileFormattedSize = computed(() => {
-  if (!firmware.value) return ''
-  const bytes = firmware.value.size
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
-})
-
 function getTimestamp() {
   const d = new Date()
   return d.toTimeString().split(' ')[0]
@@ -317,7 +308,7 @@ function setChipTarget(name) {
   else if (upper.includes('ESP32-P4')) chipType.value = 'ESP32-P4'
   else if (upper.includes('ESP8266')) {
     chipType.value = 'ESP8266'
-    if (flashAddress.value === '0x10000') flashAddress.value = '0x0'
+    firmwareFiles.value.forEach(f => { if (f.address === '0x10000') f.address = '0x0' })
   } else if (upper.includes('ESP32')) chipType.value = 'ESP32'
 }
 
@@ -613,33 +604,85 @@ async function hardwareReset() {
   }
 }
 
+let fileSeq = 0
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
+
+function parseAddress(text) {
+  const value = String(text).trim()
+  if (!/^(0x[0-9a-f]+|\d+)$/i.test(value)) return NaN
+  return Number.parseInt(value, 0)
+}
+
+// Typical Arduino IDE / PlatformIO / ESP-IDF output names
+function guessAddress(name) {
+  const n = name.toLowerCase()
+  if (/merged|factory|full/.test(n)) return '0x0'
+  if (n.includes('bootloader')) return `0x${bootloaderOffset(chipType.value).toString(16)}`
+  if (n.includes('partition')) return '0x8000'
+  if (n.includes('boot_app0')) return '0xe000'
+  return chipType.value === 'ESP8266' ? '0x0' : '0x10000'
+}
+
+const firmwareTotalSize = computed(() => formatBytes(firmwareFiles.value.reduce((sum, f) => sum + f.file.size, 0)))
+
+// Invalid addresses and overlapping images are reported before anything is written
+const firmwareIssues = computed(() => {
+  const issues = []
+  const ranges = []
+  for (const f of firmwareFiles.value) {
+    const address = parseAddress(f.address)
+    if (!Number.isFinite(address)) {
+      issues.push(lang.value === 'pt'
+        ? `Endereço inválido em ${f.file.name}. Utilize o formato hexadecimal como 0x10000.`
+        : `Invalid address for ${f.file.name}.`)
+      continue
+    }
+    ranges.push({ name: f.file.name, start: address, end: address + f.file.size })
+  }
+  ranges.sort((a, b) => a.start - b.start)
+  for (let i = 1; i < ranges.length; i++) {
+    if (ranges[i].start < ranges[i - 1].end) {
+      issues.push(lang.value === 'pt'
+        ? `${ranges[i - 1].name} e ${ranges[i].name} sobrepõem-se na flash.`
+        : `${ranges[i - 1].name} and ${ranges[i].name} overlap in flash.`)
+    }
+  }
+  return issues
+})
+
+function addFirmwareFiles(fileList) {
+  for (const file of Array.from(fileList || [])) {
+    if (!file.name.toLowerCase().endsWith('.bin')) {
+      addLog(lang.value === 'pt' ? `Aviso: ${file.name} não tem extensão .bin.` : `Warning: ${file.name} does not have a .bin extension.`, 'system')
+    }
+    const address = guessAddress(file.name)
+    firmwareFiles.value.push({ id: ++fileSeq, file, address })
+    addLog(lang.value === 'pt' ? `Ficheiro carregado: ${file.name} (${formatBytes(file.size)}) em ${address}` : `Firmware loaded: ${file.name} (${formatBytes(file.size)}) at ${address}`, 'system')
+  }
+}
+
 function onFileSelect(event) {
-  const file = event.target.files?.[0] || null
-  setFirmwareFile(file)
+  addFirmwareFiles(event.target.files)
+  event.target.value = ''
 }
 
 function handleDrop(event) {
   isDragging.value = false
-  const file = event.dataTransfer?.files?.[0] || null
-  setFirmwareFile(file)
+  addFirmwareFiles(event.dataTransfer?.files)
 }
 
-function setFirmwareFile(file) {
-  if (!file) return
-  if (!file.name.toLowerCase().endsWith('.bin')) {
-    addLog(lang.value === 'pt' ? 'Aviso: Recomendamos ficheiros com extensão .bin para ESP32.' : 'Warning: Recommended file extension is .bin for ESP32.', 'system')
-  }
-  firmware.value = file
-  addLog(lang.value === 'pt' ? `Ficheiro carregado: ${file.name} (${fileFormattedSize.value})` : `Firmware loaded: ${file.name} (${fileFormattedSize.value})`, 'system')
+function removeFirmwareFile(id) {
+  firmwareFiles.value = firmwareFiles.value.filter(f => f.id !== id)
 }
 
 function clearFirmware() {
-  firmware.value = null
+  firmwareFiles.value = []
   selectedPresetId.value = null
-}
-
-function setAddressPreset(addr) {
-  flashAddress.value = addr
 }
 
 // Firmware Presets (Erase)
@@ -682,29 +725,8 @@ const activePreset = computed(() => {
   return firmwarePresets.value.find(p => p.id === selectedPresetId.value) || null
 })
 
-async function selectPreset(preset) {
+function selectPreset(preset) {
   selectedPresetId.value = preset.id
-  if (preset.targetChip && !preset.isEraseOnly) {
-    chipType.value = preset.targetChip
-  }
-  flashAddress.value = preset.defaultOffset || '0x10000'
-
-  if (preset.isEraseOnly) {
-    firmware.value = null
-    return
-  }
-
-  try {
-    addLog(lang.value === 'pt' ? `A carregar exemplo padrão: ${preset.title}...` : `Loading preset: ${preset.title}...`, 'system')
-    const res = await fetch(preset.fileUrl)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const blob = await res.blob()
-    const file = new File([blob], preset.fileName, { type: 'application/octet-stream' })
-    firmware.value = file
-    addLog(lang.value === 'pt' ? `✓ Exemplo pronto para gravação: ${preset.title} (${(file.size / 1024).toFixed(1)} KB)` : `✓ Preset ready to flash: ${preset.title}`, 'success')
-  } catch (err) {
-    addLog(`${lang.value === 'pt' ? 'Erro ao carregar ficheiro do exemplo' : 'Error loading preset file'}: ${err.message}`, 'error')
-  }
 }
 
 async function releaseSerial() {
@@ -787,16 +809,16 @@ async function flash() {
     addLog(lang.value === 'pt' ? 'Ligue o ESP32 antes de gravar o firmware.' : 'Connect your ESP32 before flashing.', 'error')
     return
   }
-  if (!firmware.value) {
+  if (!firmwareFiles.value.length) {
     addLog(lang.value === 'pt' ? 'Selecione primeiro um ficheiro de firmware (.bin).' : 'Select a .bin firmware file first.', 'error')
     return
   }
-
-  const address = Number.parseInt(flashAddress.value, 0)
-  if (!Number.isFinite(address)) {
-    addLog(lang.value === 'pt' ? 'Endereço de flash inválido. Utilize o formato hexadecimal como 0x10000.' : 'Invalid flash address.', 'error')
+  if (firmwareIssues.value.length) {
+    firmwareIssues.value.forEach(msg => addLog(msg, 'error'))
     return
   }
+
+  const entries = firmwareFiles.value.map(f => ({ name: f.file.name, file: f.file, addressText: f.address, address: parseAddress(f.address) }))
 
   isFlashing.value = true
   progress.value = 2
@@ -807,8 +829,8 @@ async function flash() {
     await runWithLoader(async (loader, chipDesc) => {
       addLog(lang.value === 'pt' ? `Chip confirmado com sucesso: ${chipDesc}` : `Chip confirmed: ${chipDesc}`, 'success')
 
-      flashStatusText.value = lang.value === 'pt' ? 'A ler ficheiro binário...' : 'Reading binary...'
-      let bytes = await readFileBytes(firmware.value)
+      flashStatusText.value = lang.value === 'pt' ? 'A ler ficheiros binários...' : 'Reading binaries...'
+      for (const entry of entries) entry.bytes = await readFileBytes(entry.file)
 
       let sizeLabel = flashSize.value
       if (sizeLabel === 'detect') {
@@ -818,31 +840,36 @@ async function flash() {
           : `Detected flash size: ${sizeLabel === 'keep' ? 'unknown' : sizeLabel}`, 'system')
       }
       const flashBytes = flashSizeToBytes(sizeLabel)
-      if (flashBytes && address + bytes.length > flashBytes) {
-        throw new Error(lang.value === 'pt'
-          ? `O ficheiro (${(bytes.length / 1024).toFixed(0)} KB em ${flashAddress.value}) não cabe na flash de ${sizeLabel}.`
-          : `File (${(bytes.length / 1024).toFixed(0)} KB at ${flashAddress.value}) does not fit in ${sizeLabel} flash.`)
+      for (const entry of entries) {
+        if (flashBytes && entry.address + entry.bytes.length > flashBytes) {
+          throw new Error(lang.value === 'pt'
+            ? `${entry.name} (${(entry.bytes.length / 1024).toFixed(0)} KB em ${entry.addressText}) não cabe na flash de ${sizeLabel}.`
+            : `${entry.name} (${(entry.bytes.length / 1024).toFixed(0)} KB at ${entry.addressText}) does not fit in ${sizeLabel} flash.`)
+        }
       }
 
-      // Detected size is only written into the header when the user did not ask to keep the file's own value
-      const patched = await patchImageHeader(bytes, address, chipType.value, {
-        mode: flashMode.value,
-        freq: flashFreq.value,
-        size: flashSize.value === 'detect' ? sizeLabel : flashSize.value
-      })
-      if (patched !== bytes) {
+      const fileArray = []
+      for (const entry of entries) {
+        // Detected size is only written into the header when the user did not ask to keep the file's own value
+        const patched = await patchImageHeader(entry.bytes, entry.address, chipType.value, {
+          mode: flashMode.value,
+          freq: flashFreq.value,
+          size: flashSize.value === 'detect' ? sizeLabel : flashSize.value
+        })
+        if (patched !== entry.bytes) {
+          addLog(lang.value === 'pt'
+            ? `Cabeçalho de ${entry.name} ajustado (modo ${flashMode.value}, freq ${flashFreq.value}, tamanho ${sizeLabel}).`
+            : `Header of ${entry.name} updated (mode ${flashMode.value}, freq ${flashFreq.value}, size ${sizeLabel}).`, 'system')
+        }
+        fileArray.push({ data: bytesToBinaryString(patched), address: entry.address })
         addLog(lang.value === 'pt'
-          ? `Cabeçalho do bootloader ajustado (modo ${flashMode.value}, freq ${flashFreq.value}, tamanho ${sizeLabel}).`
-          : `Bootloader header updated (mode ${flashMode.value}, freq ${flashFreq.value}, size ${sizeLabel}).`, 'system')
-        bytes = patched
+          ? `A gravar ${entry.name} em ${entry.addressText} (${(patched.length / 1024).toFixed(1)} KB)...`
+          : `Flashing ${entry.name} at ${entry.addressText}...`, 'system')
       }
-      const binaryData = bytesToBinaryString(bytes)
 
       flashStatusText.value = lang.value === 'pt' ? 'A gravar blocos de memória...' : 'Writing flash memory blocks...'
-      addLog(lang.value === 'pt' ? `A gravar ${firmware.value.name} em ${flashAddress.value} (${(binaryData.length / 1024).toFixed(1)} KB)...` : `Flashing ${firmware.value.name} at ${flashAddress.value}...`, 'system')
-
       await loader.writeFlash({
-        fileArray: [{ data: binaryData, address }],
+        fileArray,
         // Header patching is done above; esptool-js would otherwise corrupt the bootloader header
         flashMode: 'keep',
         flashFreq: 'keep',
@@ -850,14 +877,15 @@ async function flash() {
         eraseAll: false,
         compress: true,
         calculateMD5Hash: verifyAfterFlash.value ? (image) => md5(binaryStringToBytes(image)) : undefined,
-        reportProgress: (_index, written, total) => {
-          const pct = Math.round((written / total) * 100)
+        reportProgress: (index, written, total) => {
+          const pct = Math.round(((index + written / total) / entries.length) * 100)
           progress.value = pct
-          flashStatusText.value = `${lang.value === 'pt' ? 'A gravar' : 'Flashing'}: ${pct}% (${(written / 1024).toFixed(0)} / ${(total / 1024).toFixed(0)} KB)`
+          const label = entries.length > 1 ? ` [${index + 1}/${entries.length}] ${entries[index].name}` : ''
+          flashStatusText.value = `${lang.value === 'pt' ? 'A gravar' : 'Flashing'}${label}: ${pct}% (${(written / 1024).toFixed(0)} / ${(total / 1024).toFixed(0)} KB)`
         },
       })
       if (verifyAfterFlash.value) {
-        addLog(lang.value === 'pt' ? '✓ MD5 verificado: os dados na flash coincidem com o ficheiro.' : '✓ MD5 verified: flash contents match the file.', 'success')
+        addLog(lang.value === 'pt' ? '✓ MD5 verificado: os dados na flash coincidem com os ficheiros.' : '✓ MD5 verified: flash contents match the files.', 'success')
       }
 
       flashStatusText.value = lang.value === 'pt' ? 'A reiniciar o microcontrolador...' : 'Resetting microcontroller...'
@@ -866,7 +894,7 @@ async function flash() {
     connected.value = false
     progress.value = 100
     flashStatusText.value = lang.value === 'pt' ? 'Gravação concluída com sucesso!' : 'Flash completed successfully!'
-    addLog(lang.value === 'pt' ? `✓ Firmware gravado com sucesso no endereço ${flashAddress.value}!` : `✓ Firmware flashed successfully at ${flashAddress.value}!`, 'success')
+    addLog(lang.value === 'pt' ? `✓ ${entries.length} ficheiro(s) gravado(s) com sucesso!` : `✓ ${entries.length} file(s) flashed successfully!`, 'success')
   } catch (error) {
     connected.value = false
     flashStatusText.value = lang.value === 'pt' ? 'Falha na gravação.' : 'Flashing failed.'
@@ -1378,11 +1406,10 @@ onBeforeUnmount(() => {
 
                 <!-- CUSTOM FILE UPLOAD VIEW -->
                 <template v-else>
-                  <!-- Dropzone when no file selected -->
+                  <!-- Dropzone (compact once files are added) -->
                   <div
-                    v-if="!firmware"
                     class="dropzone"
-                    :class="{ dragging: isDragging }"
+                    :class="{ dragging: isDragging, compact: firmwareFiles.length }"
                     @dragover.prevent="isDragging = true"
                     @dragleave.prevent="isDragging = false"
                     @drop.prevent="handleDrop"
@@ -1390,69 +1417,71 @@ onBeforeUnmount(() => {
                     <input
                       id="bin-upload"
                       type="file"
+                      multiple
                       accept=".bin,application/octet-stream"
                       @change="onFileSelect"
                       class="dropzone-input"
                     />
                     <label for="bin-upload" class="dropzone-label">
-                      <div class="dropzone-icon-ring">
+                      <div v-if="!firmwareFiles.length" class="dropzone-icon-ring">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                           <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
                           <path d="M12 12v9" />
                           <path d="m16 16-4-4-4 4" />
                         </svg>
                       </div>
-                      <span class="dropzone-main-text">{{ t.dragDropLabel }}</span>
-                      <span class="dropzone-sub-text">{{ t.dragDropHint }}</span>
+                      <span class="dropzone-main-text">{{ firmwareFiles.length ? (lang === 'pt' ? '+ Adicionar mais ficheiros .bin' : '+ Add more .bin files') : t.dragDropLabel }}</span>
+                      <span v-if="!firmwareFiles.length" class="dropzone-sub-text">{{ lang === 'pt' ? 'Pode escolher vários ficheiros (bootloader, partições, boot_app0, aplicação).' : 'You can pick several files (bootloader, partitions, boot_app0, application).' }}</span>
                     </label>
                   </div>
 
-                  <!-- Selected File Info Card -->
-                  <div v-else class="selected-file-card">
-                    <div class="file-icon-box">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-                        <polyline points="14 2 14 8 20 8" />
-                      </svg>
+                  <!-- Selected files, each with its own flash address -->
+                  <div v-if="firmwareFiles.length" class="firmware-list">
+                    <div v-for="item in firmwareFiles" :key="item.id" class="firmware-row">
+                      <div class="file-icon-box">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                          <polyline points="14 2 14 8 20 8" />
+                        </svg>
+                      </div>
+                      <div class="file-meta">
+                        <strong class="file-name" :title="item.file.name">{{ item.file.name }}</strong>
+                        <span class="file-size">{{ formatBytes(item.file.size) }}</span>
+                      </div>
+                      <div class="input-container firmware-addr">
+                        <span class="input-prefix">HEX</span>
+                        <input
+                          v-model="item.address"
+                          type="text"
+                          class="custom-input mono-font"
+                          list="flash-address-list"
+                          placeholder="0x10000"
+                          spellcheck="false"
+                          :aria-label="t.addressLabel"
+                        />
+                      </div>
+                      <button class="remove-file-btn" @click="removeFirmwareFile(item.id)" :title="t.removeFile">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <line x1="18" x2="6" y1="6" y2="18" />
+                          <line x1="6" x2="18" y1="6" y2="18" />
+                        </svg>
+                      </button>
                     </div>
-                    <div class="file-meta">
-                      <strong class="file-name" :title="firmware.name">{{ firmware.name }}</strong>
-                      <span class="file-size">{{ fileFormattedSize }} &bull; Imagem Binária</span>
+                    <datalist id="flash-address-list">
+                      <option value="0x0">Full image</option>
+                      <option value="0x1000">Bootloader (ESP32 / S2)</option>
+                      <option value="0x2000">Bootloader (P4)</option>
+                      <option value="0x8000">Partition table</option>
+                      <option value="0xe000">boot_app0 (OTA data)</option>
+                      <option value="0x10000">Application</option>
+                    </datalist>
+                    <div class="firmware-summary">
+                      <span>{{ firmwareFiles.length }} {{ lang === 'pt' ? 'ficheiro(s)' : 'file(s)' }} · {{ firmwareTotalSize }}</span>
+                      <button type="button" class="link-btn" @click="clearFirmware">{{ lang === 'pt' ? 'Remover todos' : 'Remove all' }}</button>
                     </div>
-                    <button class="remove-file-btn" @click="clearFirmware" :title="t.removeFile">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="18" x2="6" y1="6" y2="18" />
-                        <line x1="6" x2="18" y1="6" y2="18" />
-                      </svg>
-                    </button>
+                    <p v-for="msg in firmwareIssues" :key="msg" class="form-hint issue">{{ msg }}</p>
                   </div>
                 </template>
-
-                <!-- Flash Memory Offset Address (shown when not erase only) -->
-                <div v-if="!activePreset?.isEraseOnly || firmwareSource === 'custom'" class="form-group offset-group">
-                  <div class="offset-header">
-                    <label class="form-label" for="offset-input">
-                      <span>{{ t.addressLabel }}</span>
-                    </label>
-                    <div class="offset-pills">
-                      <button type="button" class="addr-pill" :class="{ active: flashAddress === '0x10000' }" @click="setAddressPreset('0x10000')">0x10000 (App)</button>
-                      <button type="button" class="addr-pill" :class="{ active: flashAddress === '0x8000' }" @click="setAddressPreset('0x8000')">0x8000 (Part)</button>
-                      <button type="button" class="addr-pill" :class="{ active: flashAddress === '0x1000' }" @click="setAddressPreset('0x1000')">0x1000 (Boot)</button>
-                      <button type="button" class="addr-pill" :class="{ active: flashAddress === '0x0' }" @click="setAddressPreset('0x0')">0x0 (Full)</button>
-                    </div>
-                  </div>
-                  <div class="input-container">
-                    <span class="input-prefix">HEX</span>
-                    <input
-                      id="offset-input"
-                      v-model="flashAddress"
-                      type="text"
-                      class="custom-input mono-font"
-                      placeholder="0x10000"
-                      spellcheck="false"
-                    />
-                  </div>
-                </div>
 
                 <!-- Flash Options -->
                 <div v-if="!activePreset?.isEraseOnly || firmwareSource === 'custom'" class="flash-options">
@@ -1496,14 +1525,14 @@ onBeforeUnmount(() => {
                 <button
                   v-if="!activePreset?.isEraseOnly || firmwareSource === 'custom'"
                   class="btn-flash"
-                  :disabled="isFlashing || !firmware || !connected"
+                  :disabled="isFlashing || !firmwareFiles.length || !connected || firmwareIssues.length > 0"
                   @click="flash"
                 >
                   <svg v-if="!isFlashing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
                   </svg>
                   <span v-else class="spinner"></span>
-                  <span>{{ isFlashing ? t.flashingBtn : (firmwareSource === 'presets' ? (lang === 'pt' ? 'Gravar Exemplo no ' + chipType : 'Flash Example to ' + chipType) : t.flashBtn) }}</span>
+                  <span>{{ isFlashing ? t.flashingBtn : t.flashBtn }}</span>
                 </button>
 
                 <!-- Flashing Progress Indicator -->
