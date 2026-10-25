@@ -3189,3 +3189,5 @@ select option {
 }
 
 .csv-editor:focus { outline: none; border-color: var(--border-focus); }
+
+.muted-offset { color: var(--text-muted); }

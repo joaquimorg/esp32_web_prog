@@ -1984,7 +1984,7 @@ onBeforeUnmount(() => {
 
         <!-- VIEW: TOOLS -->
         <div v-else-if="activeView === 'tools'" class="view-content fade-in">
-          <ToolsView :connected="connected" :lang="lang" :chip="chipType" :run="runBoardTask" :log="addLog" />
+          <ToolsView :connected="connected" :lang="lang" :chip="chipType" :run="runBoardTask" :log="addLog" :logs="logs" />
         </div>
 
         <!-- VIEW: GUIDE & PINOUT -->
