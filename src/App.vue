@@ -1,6 +1,11 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ESPLoader, Transport } from 'esptool-js'
+import { md5 } from './lib/md5'
+import {
+  FLASH_FREQ_OPTIONS, FLASH_MODE_OPTIONS, FLASH_SIZE_OPTIONS,
+  binaryStringToBytes, bytesToBinaryString, flashSizeLabel, flashSizeToBytes, patchImageHeader
+} from './lib/flashimage'
 
 // Theme & Locale
 const dark = ref(true)
@@ -43,6 +48,11 @@ const progress = ref(0)
 const isFlashing = ref(false)
 const isErasing = ref(false)
 const flashStatusText = ref('')
+const flashMode = ref('keep')
+const flashFreq = ref('keep')
+const flashSize = ref('keep')
+const verifyAfterFlash = ref(true)
+const showFlashOptions = ref(false)
 
 // Serial Console
 const serialCommand = ref('')
@@ -697,6 +707,46 @@ async function selectPreset(preset) {
   }
 }
 
+async function releaseSerial() {
+  if (reader) {
+    await reader.cancel().catch(() => {})
+    try { reader.releaseLock() } catch (e) { /* already released */ }
+    reader = null
+  }
+  if (writer) {
+    try { writer.releaseLock() } catch (e) { /* already released */ }
+    writer = null
+  }
+  if (port.value) await port.value.close().catch(() => {})
+}
+
+const loaderTerminal = {
+  clean: () => {},
+  write: (data) => addLog(String(data).trim(), 'muted'),
+  writeLine: (data) => addLog(String(data).trim(), 'muted'),
+}
+
+// Hands the port over to esptool-js, runs `task` against the connected bootloader
+// and resets the board afterwards.
+async function runWithLoader(task) {
+  await releaseSerial()
+  const transport = new Transport(port.value, true)
+  const loader = new ESPLoader({
+    transport,
+    baudrate: Number(baudRate.value),
+    terminal: loaderTerminal,
+    debugLogging: false
+  })
+  try {
+    const chipDesc = await loader.main()
+    setChipTarget(loader.chip?.CHIP_NAME || chipDesc)
+    await task(loader, chipDesc)
+    await loader.after('hard_reset')
+  } finally {
+    await transport.disconnect().catch(() => {})
+  }
+}
+
 async function eraseFullFlash() {
   if (!connected.value) {
     addLog(lang.value === 'pt' ? 'Ligue o ESP32 antes de formatar a memória Flash.' : 'Connect your ESP32 before erasing flash.', 'error')
@@ -708,38 +758,12 @@ async function eraseFullFlash() {
   addLog(lang.value === 'pt' ? 'A iniciar formatação completa da memória Flash (Erase All)...' : 'Starting full flash erase (Erase All)...', 'system')
 
   try {
-    if (reader) {
-      await reader.cancel()
-      reader.releaseLock()
-      reader = null
-    }
-    if (writer) {
-      writer.releaseLock()
-      writer = null
-    }
-    await port.value.close()
-
-    const transport = new Transport(port.value, true)
-    const loader = new ESPLoader({
-      transport,
-      baudrate: Number(baudRate.value),
-      terminal: {
-        clean: () => {},
-        write: (d) => addLog(String(d).trim(), 'muted'),
-        writeLine: (d) => addLog(String(d).trim(), 'muted'),
-      },
-      debugLogging: false
+    await runWithLoader(async (loader) => {
+      flashStatusText.value = lang.value === 'pt' ? 'A apagar todos os setores da flash...' : 'Erasing all flash sectors...'
+      addLog(lang.value === 'pt' ? 'A apagar todos os blocos e setores da memória flash (pode demorar alguns segundos)...' : 'Erasing all flash blocks (this may take a few seconds)...', 'system')
+      await loader.eraseFlash()
+      flashStatusText.value = lang.value === 'pt' ? 'A reiniciar...' : 'Resetting...'
     })
-
-    const chipDesc = await loader.main()
-    flashStatusText.value = lang.value === 'pt' ? 'A apagar todos os setores da flash...' : 'Erasing all flash sectors...'
-    addLog(lang.value === 'pt' ? 'A apagar todos os blocos e setores da memória flash (pode demorar alguns segundos)...' : 'Erasing all flash blocks (this may take a few seconds)...', 'system')
-
-    await loader.eraseFlash()
-
-    flashStatusText.value = lang.value === 'pt' ? 'A reiniciar...' : 'Resetting...'
-    await loader.after('hard_reset')
-    await transport.disconnect()
 
     connected.value = false
     progress.value = 100
@@ -754,13 +778,8 @@ async function eraseFullFlash() {
   }
 }
 
-function fileToBinaryString(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result)
-    reader.onerror = () => reject(new Error('Falha ao ler dados binários do ficheiro.'))
-    reader.readAsBinaryString(file)
-  })
+async function readFileBytes(file) {
+  return new Uint8Array(await file.arrayBuffer())
 }
 
 async function flash() {
@@ -773,69 +792,76 @@ async function flash() {
     return
   }
 
+  const address = Number.parseInt(flashAddress.value, 0)
+  if (!Number.isFinite(address)) {
+    addLog(lang.value === 'pt' ? 'Endereço de flash inválido. Utilize o formato hexadecimal como 0x10000.' : 'Invalid flash address.', 'error')
+    return
+  }
+
   isFlashing.value = true
   progress.value = 2
   flashStatusText.value = lang.value === 'pt' ? 'A iniciar bootloader...' : 'Starting bootloader...'
   addLog(lang.value === 'pt' ? 'A preparar gravação de firmware. A libertar canal serial de monitorização...' : 'Preparing flash. Releasing serial monitor lock...', 'system')
 
   try {
-    if (reader) {
-      await reader.cancel()
-      reader.releaseLock()
-      reader = null
-    }
-    if (writer) {
-      writer.releaseLock()
-      writer = null
-    }
-    await port.value.close()
+    await runWithLoader(async (loader, chipDesc) => {
+      addLog(lang.value === 'pt' ? `Chip confirmado com sucesso: ${chipDesc}` : `Chip confirmed: ${chipDesc}`, 'success')
 
-    flashStatusText.value = lang.value === 'pt' ? 'A ligar ao chip...' : 'Connecting to chip...'
-    const terminal = {
-      clean: () => {},
-      write: (data) => addLog(String(data).trim(), 'muted'),
-      writeLine: (data) => addLog(String(data).trim(), 'muted'),
-    }
+      flashStatusText.value = lang.value === 'pt' ? 'A ler ficheiro binário...' : 'Reading binary...'
+      let bytes = await readFileBytes(firmware.value)
 
-    const transport = new Transport(port.value, true)
-    const loader = new ESPLoader({
-      transport,
-      baudrate: Number(baudRate.value),
-      terminal,
-      debugLogging: false
+      let sizeLabel = flashSize.value
+      if (sizeLabel === 'detect') {
+        sizeLabel = flashSizeLabel(await loader.getFlashSize().catch(() => 0)) || 'keep'
+        addLog(lang.value === 'pt'
+          ? `Tamanho da flash detetado: ${sizeLabel === 'keep' ? 'desconhecido' : sizeLabel}`
+          : `Detected flash size: ${sizeLabel === 'keep' ? 'unknown' : sizeLabel}`, 'system')
+      }
+      const flashBytes = flashSizeToBytes(sizeLabel)
+      if (flashBytes && address + bytes.length > flashBytes) {
+        throw new Error(lang.value === 'pt'
+          ? `O ficheiro (${(bytes.length / 1024).toFixed(0)} KB em ${flashAddress.value}) não cabe na flash de ${sizeLabel}.`
+          : `File (${(bytes.length / 1024).toFixed(0)} KB at ${flashAddress.value}) does not fit in ${sizeLabel} flash.`)
+      }
+
+      // Detected size is only written into the header when the user did not ask to keep the file's own value
+      const patched = await patchImageHeader(bytes, address, chipType.value, {
+        mode: flashMode.value,
+        freq: flashFreq.value,
+        size: flashSize.value === 'detect' ? sizeLabel : flashSize.value
+      })
+      if (patched !== bytes) {
+        addLog(lang.value === 'pt'
+          ? `Cabeçalho do bootloader ajustado (modo ${flashMode.value}, freq ${flashFreq.value}, tamanho ${sizeLabel}).`
+          : `Bootloader header updated (mode ${flashMode.value}, freq ${flashFreq.value}, size ${sizeLabel}).`, 'system')
+        bytes = patched
+      }
+      const binaryData = bytesToBinaryString(bytes)
+
+      flashStatusText.value = lang.value === 'pt' ? 'A gravar blocos de memória...' : 'Writing flash memory blocks...'
+      addLog(lang.value === 'pt' ? `A gravar ${firmware.value.name} em ${flashAddress.value} (${(binaryData.length / 1024).toFixed(1)} KB)...` : `Flashing ${firmware.value.name} at ${flashAddress.value}...`, 'system')
+
+      await loader.writeFlash({
+        fileArray: [{ data: binaryData, address }],
+        // Header patching is done above; esptool-js would otherwise corrupt the bootloader header
+        flashMode: 'keep',
+        flashFreq: 'keep',
+        flashSize: 'keep',
+        eraseAll: false,
+        compress: true,
+        calculateMD5Hash: verifyAfterFlash.value ? (image) => md5(binaryStringToBytes(image)) : undefined,
+        reportProgress: (_index, written, total) => {
+          const pct = Math.round((written / total) * 100)
+          progress.value = pct
+          flashStatusText.value = `${lang.value === 'pt' ? 'A gravar' : 'Flashing'}: ${pct}% (${(written / 1024).toFixed(0)} / ${(total / 1024).toFixed(0)} KB)`
+        },
+      })
+      if (verifyAfterFlash.value) {
+        addLog(lang.value === 'pt' ? '✓ MD5 verificado: os dados na flash coincidem com o ficheiro.' : '✓ MD5 verified: flash contents match the file.', 'success')
+      }
+
+      flashStatusText.value = lang.value === 'pt' ? 'A reiniciar o microcontrolador...' : 'Resetting microcontroller...'
     })
-
-    const chipDesc = await loader.main()
-    setChipTarget(loader.chip?.CHIP_NAME || chipDesc)
-    addLog(lang.value === 'pt' ? `Chip confirmado com sucesso: ${chipDesc}` : `Chip confirmed: ${chipDesc}`, 'success')
-
-    flashStatusText.value = lang.value === 'pt' ? 'A ler ficheiro binário...' : 'Reading binary...'
-    const binaryData = await fileToBinaryString(firmware.value)
-    const address = Number.parseInt(flashAddress.value, 0)
-    if (!Number.isFinite(address)) {
-      throw new Error(lang.value === 'pt' ? 'Endereço de flash inválido. Utilize o formato hexadecimal como 0x10000.' : 'Invalid flash address.')
-    }
-
-    flashStatusText.value = lang.value === 'pt' ? 'A gravar blocos de memória...' : 'Writing flash memory blocks...'
-    addLog(lang.value === 'pt' ? `A gravar ${firmware.value.name} em ${flashAddress.value} (${(binaryData.length / 1024).toFixed(1)} KB)...` : `Flashing ${firmware.value.name} at ${flashAddress.value}...`, 'system')
-
-    await loader.writeFlash({
-      fileArray: [{ data: binaryData, address }],
-      flashMode: 'dio',
-      flashFreq: '40m',
-      flashSize: '4MB',
-      eraseAll: false,
-      compress: true,
-      reportProgress: (_index, written, total) => {
-        const pct = Math.round((written / total) * 100)
-        progress.value = pct
-        flashStatusText.value = `${lang.value === 'pt' ? 'A gravar' : 'Flashing'}: ${pct}% (${(written / 1024).toFixed(0)} / ${(total / 1024).toFixed(0)} KB)`
-      },
-    })
-
-    flashStatusText.value = lang.value === 'pt' ? 'A reiniciar o microcontrolador...' : 'Resetting microcontroller...'
-    await loader.after('hard_reset')
-    await transport.disconnect()
 
     connected.value = false
     progress.value = 100
@@ -876,12 +902,6 @@ onMounted(() => {
     lang.value = savedLang
   }
   window.addEventListener('click', onClickOutside)
-
-  // Select default preset
-  const defaultP = firmwarePresets.value[0]
-  if (defaultP) {
-    selectPreset(defaultP)
-  }
 })
 
 onBeforeUnmount(() => {
@@ -1431,6 +1451,44 @@ onBeforeUnmount(() => {
                       placeholder="0x10000"
                       spellcheck="false"
                     />
+                  </div>
+                </div>
+
+                <!-- Flash Options -->
+                <div v-if="!activePreset?.isEraseOnly || firmwareSource === 'custom'" class="flash-options">
+                  <button type="button" class="flash-options-toggle" @click="showFlashOptions = !showFlashOptions">
+                    <span>{{ lang === 'pt' ? 'Opções de flash' : 'Flash options' }}</span>
+                    <span class="flash-options-summary">{{ flashMode }} · {{ flashFreq }} · {{ flashSize }}{{ verifyAfterFlash ? ' · MD5' : '' }}</span>
+                    <svg class="ending-chevron" :class="{ rotated: showFlashOptions }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  </button>
+                  <div v-if="showFlashOptions" class="flash-options-body fade-in">
+                    <div class="flash-options-grid">
+                      <label class="mini-field">
+                        <span>{{ lang === 'pt' ? 'Modo' : 'Mode' }}</span>
+                        <select v-model="flashMode" class="custom-select">
+                          <option v-for="o in FLASH_MODE_OPTIONS" :key="o" :value="o">{{ o === 'keep' ? (lang === 'pt' ? 'Manter (ficheiro)' : 'Keep (file)') : o.toUpperCase() }}</option>
+                        </select>
+                      </label>
+                      <label class="mini-field">
+                        <span>{{ lang === 'pt' ? 'Frequência' : 'Frequency' }}</span>
+                        <select v-model="flashFreq" class="custom-select">
+                          <option v-for="o in FLASH_FREQ_OPTIONS" :key="o" :value="o">{{ o === 'keep' ? (lang === 'pt' ? 'Manter (ficheiro)' : 'Keep (file)') : o.toUpperCase().replace('M', ' MHz') }}</option>
+                        </select>
+                      </label>
+                      <label class="mini-field">
+                        <span>{{ lang === 'pt' ? 'Tamanho' : 'Size' }}</span>
+                        <select v-model="flashSize" class="custom-select">
+                          <option v-for="o in FLASH_SIZE_OPTIONS" :key="o" :value="o">{{ o === 'keep' ? (lang === 'pt' ? 'Manter (ficheiro)' : 'Keep (file)') : o === 'detect' ? (lang === 'pt' ? 'Detetar automaticamente' : 'Auto-detect') : o }}</option>
+                        </select>
+                      </label>
+                    </div>
+                    <label class="check-row">
+                      <input type="checkbox" v-model="verifyAfterFlash" />
+                      <span>{{ lang === 'pt' ? 'Verificar MD5 após gravar' : 'Verify MD5 after flashing' }}</span>
+                    </label>
+                    <p class="form-hint">{{ lang === 'pt' ? 'Modo, frequência e tamanho só alteram o cabeçalho de um bootloader gravado no seu endereço de arranque. Com "Manter" o ficheiro é gravado tal como está.' : 'Mode, frequency and size only rewrite the header of a bootloader written at its boot address. "Keep" writes the file untouched.' }}</p>
                   </div>
                 </div>
 
