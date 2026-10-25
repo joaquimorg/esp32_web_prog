@@ -74,6 +74,10 @@ const quickCommands = ref(DEFAULT_MACROS.slice())
 const editingMacros = ref(false)
 const macroDraft = ref('')
 
+// Manual control of the serial handshake lines (DTR / RTS)
+const dtrState = ref(false)
+const rtsState = ref(false)
+
 // Custom Line Ending Dropdown
 const showEndingMenu = ref(false)
 const endingDropdownRef = ref(null)
@@ -622,6 +626,29 @@ function handleHistoryKey(e) {
   }
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+
+async function applySignals(dtr, rts) {
+  await port.value.setSignals({ dataTerminalReady: dtr, requestToSend: rts })
+  dtrState.value = dtr
+  rtsState.value = rts
+}
+
+async function toggleSignal(which) {
+  if (!port.value?.setSignals) {
+    addLog(lang.value === 'pt' ? 'Esta porta não permite controlar DTR/RTS.' : 'This port cannot drive DTR/RTS.', 'error')
+    return
+  }
+  try {
+    const dtr = which === 'dtr' ? !dtrState.value : dtrState.value
+    const rts = which === 'rts' ? !rtsState.value : rtsState.value
+    await applySignals(dtr, rts)
+    addLog(`DTR=${dtr ? 1 : 0} RTS=${rts ? 1 : 0}`, 'system')
+  } catch (err) {
+    addLog(`${lang.value === 'pt' ? 'Erro nos sinais seriais' : 'Serial signal error'}: ${err.message}`, 'error')
+  }
+}
+
 async function hardwareReset() {
   if (!port.value) {
     addLog(lang.value === 'pt' ? 'Nenhuma placa ligada.' : 'No board connected.', 'error')
@@ -630,15 +657,34 @@ async function hardwareReset() {
   try {
     addLog(lang.value === 'pt' ? 'A enviar impulso de reinicialização (RTS/DTR)...' : 'Pulsing reset signals (RTS/DTR)...', 'system')
     if (port.value.setSignals) {
-      await port.value.setSignals({ dataTerminalReady: false, requestToSend: true })
-      await new Promise(r => setTimeout(r, 100))
-      await port.value.setSignals({ dataTerminalReady: false, requestToSend: false })
+      await applySignals(false, true)
+      await sleep(100)
+      await applySignals(false, false)
       addLog(lang.value === 'pt' ? 'Sinal de reinicialização emitido com sucesso.' : 'Reset signal pulsed.', 'success')
     } else {
       await sendCommand('reset')
     }
   } catch (err) {
     addLog(`${lang.value === 'pt' ? 'Erro ao reiniciar' : 'Reset error'}: ${err.message}`, 'error')
+  }
+}
+
+// Same sequence as esptool's classic reset: RTS drives EN, DTR drives GPIO0 (both inverted)
+async function enterBootloaderMode() {
+  if (!port.value?.setSignals) {
+    addLog(lang.value === 'pt' ? 'Nenhuma placa ligada.' : 'No board connected.', 'error')
+    return
+  }
+  try {
+    addLog(lang.value === 'pt' ? 'A forçar modo bootloader (GPIO0 baixo + reset)...' : 'Forcing bootloader mode (GPIO0 low + reset)...', 'system')
+    await applySignals(false, true)
+    await sleep(100)
+    await applySignals(true, false)
+    await sleep(50)
+    await applySignals(false, false)
+    addLog(lang.value === 'pt' ? 'Sequência enviada. Se a placa responder com "waiting for download", está em modo bootloader.' : 'Sequence sent. A "waiting for download" message means the board is in bootloader mode.', 'success')
+  } catch (err) {
+    addLog(`${lang.value === 'pt' ? 'Erro ao entrar em modo bootloader' : 'Bootloader mode error'}: ${err.message}`, 'error')
   }
 }
 
@@ -1007,6 +1053,11 @@ function loadSettings() {
     if (check ? check(saved[key]) : typeof saved[key] === 'boolean') target.value = saved[key]
   }
 }
+
+watch(connected, () => {
+  dtrState.value = false
+  rtsState.value = false
+})
 
 watch(quickCommands, (list) => saveJson(MACROS_KEY, list), { deep: true })
 
@@ -1830,6 +1881,10 @@ onBeforeUnmount(() => {
               <button class="macro-chip" :class="{ active: editingMacros }" @click="editingMacros = !editingMacros">
                 {{ editingMacros ? (lang === 'pt' ? 'Concluir' : 'Done') : (lang === 'pt' ? 'Editar' : 'Edit') }}
               </button>
+              <span class="macro-sep" aria-hidden="true"></span>
+              <button class="macro-chip" :class="{ active: dtrState }" @click="toggleSignal('dtr')" :disabled="!connected" title="Data Terminal Ready (GPIO0)">DTR {{ dtrState ? 'ON' : 'OFF' }}</button>
+              <button class="macro-chip" :class="{ active: rtsState }" @click="toggleSignal('rts')" :disabled="!connected" title="Request To Send (EN)">RTS {{ rtsState ? 'ON' : 'OFF' }}</button>
+              <button class="macro-chip" @click="enterBootloaderMode" :disabled="!connected">{{ lang === 'pt' ? 'Modo Bootloader' : 'Bootloader Mode' }}</button>
               <button class="macro-chip reset" @click="hardwareReset" :disabled="!connected">RTS/DTR Reset</button>
             </div>
 

@@ -3007,3 +3007,10 @@ select option {
 }
 
 .macro-add input:focus { border-color: var(--border-focus); }
+
+.macro-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 4px;
+  background: var(--border-subtle);
+}
