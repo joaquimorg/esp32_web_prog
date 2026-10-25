@@ -2898,3 +2898,86 @@ select option {
   .firmware-row { flex-wrap: wrap; }
   .firmware-addr { width: 100%; order: 3; }
 }
+
+/* ==========================================================================
+   CONSOLE FILTER & LEVEL HIGHLIGHT
+   ========================================================================== */
+.console-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.filter-search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-muted);
+}
+
+.filter-search svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+.filter-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-main);
+  font-size: 0.8rem;
+}
+
+.filter-search:focus-within { border-color: var(--border-focus); }
+
+.level-tabs {
+  display: flex;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.level-tabs button {
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.level-tabs button + button { border-left: 1px solid var(--border-subtle); }
+.level-tabs button:hover { color: var(--text-main); }
+.level-tabs button.active { background: var(--glow-emerald); color: var(--accent-emerald-light); }
+
+.filter-count {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.term-row.lvl-error .term-content { color: #f87171; }
+.term-row.lvl-warn .term-content { color: #fbbf24; }
+.term-row.lvl-panic { background: rgba(244, 63, 94, 0.14); box-shadow: inset 3px 0 0 var(--accent-rose); }
+.term-row.lvl-panic .term-content { color: #fb7185; font-weight: 700; }
+
+.term-content mark {
+  background: rgba(250, 204, 21, 0.35);
+  color: inherit;
+  border-radius: 2px;
+}
+
+@media (max-width: 640px) {
+  .console-filterbar { flex-wrap: wrap; }
+  .filter-search { flex-basis: 100%; }
+}

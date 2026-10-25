@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ESPLoader, Transport } from 'esptool-js'
 import { md5 } from './lib/md5'
 import { loadJson, saveJson } from './lib/storage'
+import { classifyLine, highlightParts, matchesLevel, matchesText } from './lib/logs'
 import {
   bootloaderOffset, FLASH_FREQ_OPTIONS, FLASH_MODE_OPTIONS, FLASH_SIZE_OPTIONS,
   binaryStringToBytes, bytesToBinaryString, flashSizeLabel, flashSizeToBytes, patchImageHeader
@@ -62,6 +63,9 @@ const historyIndex = ref(-1)
 const autoScroll = ref(true)
 const showTimestamps = ref(true)
 const terminalRef = ref(null)
+const logFilter = ref('')
+const logLevel = ref('all') // 'all' | 'warn' | 'error'
+const MAX_LOG_LINES = 5000
 
 // Custom Line Ending Dropdown
 const showEndingMenu = ref(false)
@@ -240,15 +244,25 @@ const connectionLabel = computed(() => {
   return t.value.connected
 })
 
+const filterNeedle = computed(() => logFilter.value.trim().toLowerCase())
+const filteredLogs = computed(() => {
+  const needle = filterNeedle.value
+  if (!needle && logLevel.value === 'all') return logs.value
+  return logs.value.filter(l => matchesLevel(l, logLevel.value) && matchesText(l, needle))
+})
+
 function getTimestamp() {
   const d = new Date()
   return d.toTimeString().split(' ')[0]
 }
 
+let logSeq = 0
+logs.value.forEach(l => { l.id = ++logSeq; l.level = '' })
+
 function addLog(text, kind = 'device') {
-  logs.value.push({ time: getTimestamp(), text, kind })
-  if (logs.value.length > 2000) {
-    logs.value.shift()
+  logs.value.push({ id: ++logSeq, time: getTimestamp(), text, kind, level: kind === 'device' ? classifyLine(text) : '' })
+  if (logs.value.length > MAX_LOG_LINES) {
+    logs.value.splice(0, logs.value.length - MAX_LOG_LINES)
   }
   if (autoScroll.value) {
     nextTick(() => {
@@ -1731,6 +1745,29 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
+            <!-- Filter Bar -->
+            <div class="console-filterbar">
+              <div class="filter-search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8" />
+                  <line x1="21" x2="16.65" y1="21" y2="16.65" />
+                </svg>
+                <input
+                  v-model="logFilter"
+                  type="search"
+                  class="mono-font"
+                  :placeholder="lang === 'pt' ? 'Filtrar registos...' : 'Filter logs...'"
+                  spellcheck="false"
+                />
+              </div>
+              <div class="level-tabs" role="group" :aria-label="lang === 'pt' ? 'Nível' : 'Level'">
+                <button type="button" :class="{ active: logLevel === 'all' }" @click="logLevel = 'all'">{{ lang === 'pt' ? 'Tudo' : 'All' }}</button>
+                <button type="button" :class="{ active: logLevel === 'warn' }" @click="logLevel = 'warn'">{{ lang === 'pt' ? 'Avisos+' : 'Warn+' }}</button>
+                <button type="button" :class="{ active: logLevel === 'error' }" @click="logLevel = 'error'">{{ lang === 'pt' ? 'Erros' : 'Errors' }}</button>
+              </div>
+              <span class="filter-count">{{ filteredLogs.length }} / {{ logs.length }}</span>
+            </div>
+
             <!-- Terminal Window Screen -->
             <div ref="terminalRef" class="terminal-screen custom-scrollbar">
               <div v-if="logs.length === 0" class="terminal-empty">
@@ -1741,9 +1778,9 @@ onBeforeUnmount(() => {
                 <span>{{ lang === 'pt' ? 'Nenhum registo gravado até ao momento. Ligue o ESP32 para iniciar.' : 'No logs recorded yet. Connect ESP32 to start streaming.' }}</span>
               </div>
 
-              <div v-for="(log, idx) in logs" :key="idx" :class="['term-row', log.kind]">
+              <div v-for="log in filteredLogs" :key="log.id" :class="['term-row', log.kind, log.level && `lvl-${log.level}`]">
                 <time v-if="showTimestamps" class="term-time">{{ log.time }}</time>
-                <span class="term-content">{{ log.text }}</span>
+                <span class="term-content"><template v-for="(part, i) in highlightParts(log.text, filterNeedle)" :key="i"><mark v-if="part.hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
               </div>
 
               <div class="terminal-cursor-line">
