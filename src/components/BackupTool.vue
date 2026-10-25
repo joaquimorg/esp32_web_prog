@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { md5 } from '../lib/md5'
 import { binaryStringToBytes, bytesToBinaryString, flashSizeLabel, flashSizeToBytes } from '../lib/flashimage'
 import { downloadBytes, formatBytes, readFileBytes } from '../lib/files'
+import { readFlashChunked } from '../lib/loader'
 
 const props = defineProps({
   connected: Boolean,
@@ -14,8 +15,6 @@ const props = defineProps({
 
 const pt = computed(() => props.lang === 'pt')
 const SIZES = ['auto', '1MB', '2MB', '4MB', '8MB', '16MB']
-// esptool-js grows its buffer on every packet, so large reads are split in chunks
-const CHUNK = 0x40000
 
 const sizeChoice = ref('auto')
 const busy = ref(false)
@@ -38,14 +37,11 @@ async function backup() {
   status.value = pt.value ? 'A ligar ao bootloader...' : 'Connecting to bootloader...'
   const ok = await props.run(async (loader) => {
     const total = await resolveSize(loader)
-    const image = new Uint8Array(total)
     props.log(pt.value ? `A ler ${formatBytes(total)} da flash...` : `Reading ${formatBytes(total)} from flash...`, 'system')
-    for (let offset = 0; offset < total; offset += CHUNK) {
-      const size = Math.min(CHUNK, total - offset)
-      image.set(await loader.readFlash(offset, size), offset)
-      progress.value = Math.round(((offset + size) / total) * 100)
-      status.value = `${pt.value ? 'A ler' : 'Reading'}: ${progress.value}% (${formatBytes(offset + size)} / ${formatBytes(total)})`
-    }
+    const image = await readFlashChunked(loader, 0, total, (done) => {
+      progress.value = Math.round((done / total) * 100)
+      status.value = `${pt.value ? 'A ler' : 'Reading'}: ${progress.value}% (${formatBytes(done)} / ${formatBytes(total)})`
+    })
     const name = `esp-backup-${props.chip.toLowerCase()}-${flashSizeLabel(total / 1024)}-${new Date().toISOString().slice(0, 10)}.bin`
     downloadBytes(image, name)
     props.log(pt.value ? `✓ Backup guardado: ${name} (MD5 ${md5(image)})` : `✓ Backup saved: ${name} (MD5 ${md5(image)})`, 'success')

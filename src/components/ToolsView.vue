@@ -1,8 +1,9 @@
 <script setup>
 import { computed, ref } from 'vue'
 import BackupTool from './BackupTool.vue'
+import PartitionTool from './PartitionTool.vue'
 
-defineProps({
+const props = defineProps({
   connected: Boolean,
   lang: { type: String, default: 'pt' },
   chip: { type: String, default: 'ESP32' },
@@ -11,8 +12,10 @@ defineProps({
 })
 
 const tab = ref('backup')
+const lang = computed(() => props.lang)
 const tabs = computed(() => [
-  { id: 'backup', label: 'Backup / Restore' }
+  { id: 'backup', label: 'Backup / Restore' },
+  { id: 'partitions', label: lang.value === 'pt' ? 'Partições' : 'Partitions' }
 ])
 </script>
 
@@ -38,5 +41,6 @@ const tabs = computed(() => [
     </p>
 
     <BackupTool v-if="tab === 'backup'" :connected="connected" :lang="lang" :chip="chip" :run="run" :log="log" />
+    <PartitionTool v-else-if="tab === 'partitions'" :connected="connected" :lang="lang" :chip="chip" :run="run" :log="log" />
   </div>
 </template>

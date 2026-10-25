@@ -3167,3 +3167,25 @@ select option {
 @media (max-width: 900px) {
   .tool-grid { grid-template-columns: 1fr; }
 }
+
+.tool-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.csv-editor {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-main);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.csv-editor:focus { outline: none; border-color: var(--border-focus); }
