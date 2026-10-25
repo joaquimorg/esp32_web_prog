@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ESPLoader, Transport } from 'esptool-js'
 import { md5 } from './lib/md5'
 import { loadJson, saveJson } from './lib/storage'
+import SerialPlotter from './components/SerialPlotter.vue'
+import { createPlotterStore } from './lib/plotter'
 import { classifyLine, highlightParts, matchesLevel, matchesText } from './lib/logs'
 import {
   bootloaderOffset, FLASH_FREQ_OPTIONS, FLASH_MODE_OPTIONS, FLASH_SIZE_OPTIONS,
@@ -66,6 +68,25 @@ const terminalRef = ref(null)
 const logFilter = ref('')
 const logLevel = ref('all') // 'all' | 'warn' | 'error'
 const MAX_LOG_LINES = 5000
+
+// Serial plotter (numeric lines are charted as they arrive)
+const showPlotter = ref(false)
+const plotterStore = createPlotterStore()
+const plotVersion = ref(0)
+let plotFrame = 0
+
+function ingestPlotLine(line) {
+  if (!plotterStore.ingest(line) || plotFrame) return
+  plotFrame = requestAnimationFrame(() => {
+    plotFrame = 0
+    plotVersion.value++
+  })
+}
+
+function clearPlotter() {
+  plotterStore.clear()
+  plotVersion.value++
+}
 
 // Quick commands (user editable, remembered between visits)
 const MACROS_KEY = 'esp-studio-macros'
@@ -563,6 +584,7 @@ async function readSerial() {
         for (const line of lines) {
           if (line.trim()) {
             addLog(line, 'device')
+            ingestPlotLine(line)
             scanSerialForChip(line)
           }
         }
@@ -1773,6 +1795,19 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
 
+                <!-- Plotter Toggle -->
+                <button
+                  class="tool-btn"
+                  :class="{ active: showPlotter }"
+                  @click="showPlotter = !showPlotter"
+                  :title="lang === 'pt' ? 'Gráfico serial' : 'Serial plotter'"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                  </svg>
+                  <span>{{ lang === 'pt' ? 'Gráfico' : 'Plotter' }}</span>
+                </button>
+
                 <!-- Auto-scroll Toggle -->
                 <button
                   class="tool-btn"
@@ -1821,6 +1856,9 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </div>
+
+            <!-- Serial Plotter -->
+            <SerialPlotter v-if="showPlotter" :store="plotterStore" :version="plotVersion" :lang="lang" @clear="clearPlotter" />
 
             <!-- Filter Bar -->
             <div class="console-filterbar">
