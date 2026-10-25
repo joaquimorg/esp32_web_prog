@@ -3208,3 +3208,14 @@ select option {
 }
 
 .link-btn.share { color: var(--accent-emerald-light); }
+
+.url-row .custom-input {
+  padding: 9px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-main);
+  font-size: 0.8rem;
+}
+
+.url-row .custom-input:focus { outline: none; border-color: var(--border-focus); }
