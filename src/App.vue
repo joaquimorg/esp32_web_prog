@@ -770,6 +770,80 @@ function addFirmwareFiles(fileList) {
   }
 }
 
+// Firmware fetched from a URL can be shared as a link: ?fw=<url>&addr=<hex>
+const urlInput = ref('')
+const urlLoading = ref(false)
+const copiedLink = ref(false)
+
+async function loadFirmwareFromUrl(rawUrl, address = '') {
+  let url
+  try {
+    url = new URL(rawUrl.trim(), window.location.href)
+    if (!/^https?:$/.test(url.protocol)) throw new Error('protocol')
+  } catch (e) {
+    addLog(lang.value === 'pt' ? `URL inválido: ${rawUrl}` : `Invalid URL: ${rawUrl}`, 'error')
+    return false
+  }
+  urlLoading.value = true
+  addLog(lang.value === 'pt' ? `A descarregar ${url.href}...` : `Downloading ${url.href}...`, 'system')
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const blob = await res.blob()
+    const name = decodeURIComponent(url.pathname.split('/').pop() || 'firmware.bin')
+    const before = firmwareFiles.value.length
+    addFirmwareFiles([new File([blob], name, { type: 'application/octet-stream' })])
+    const added = firmwareFiles.value[before]
+    if (added) {
+      added.url = url.href
+      if (address) added.address = address
+    }
+    return true
+  } catch (err) {
+    addLog(lang.value === 'pt'
+      ? `Não foi possível obter o ficheiro (${err.message}). O servidor tem de permitir CORS (por exemplo raw.githubusercontent.com ou cdn.jsdelivr.net).`
+      : `Could not fetch the file (${err.message}). The server must allow CORS (e.g. raw.githubusercontent.com or cdn.jsdelivr.net).`, 'error')
+    return false
+  } finally {
+    urlLoading.value = false
+  }
+}
+
+async function submitUrl() {
+  if (await loadFirmwareFromUrl(urlInput.value)) urlInput.value = ''
+}
+
+// Only files that came from a URL can be part of a link
+const shareLink = computed(() => {
+  const items = firmwareFiles.value
+  if (!items.length || items.some(f => !f.url)) return ''
+  const params = new URLSearchParams()
+  for (const f of items) {
+    params.append('fw', f.url)
+    params.append('addr', f.address)
+  }
+  return `${window.location.origin}${window.location.pathname}?${params}`
+})
+
+function copyShareLink() {
+  if (!shareLink.value) return
+  navigator.clipboard?.writeText(shareLink.value)
+  copiedLink.value = true
+  setTimeout(() => { copiedLink.value = false }, 2000)
+  addLog(lang.value === 'pt' ? 'Link de gravação copiado.' : 'Flash link copied.', 'system')
+}
+
+async function loadFirmwareFromQuery() {
+  const params = new URLSearchParams(window.location.search)
+  const urls = params.getAll('fw')
+  if (!urls.length) return
+  const addrs = params.getAll('addr')
+  firmwareSource.value = 'custom'
+  for (let i = 0; i < urls.length; i++) {
+    await loadFirmwareFromUrl(urls[i], parseAddress(addrs[i] || '') >= 0 ? addrs[i] : '')
+  }
+}
+
 function onFileSelect(event) {
   addFirmwareFiles(event.target.files)
   event.target.value = ''
@@ -1111,6 +1185,7 @@ onMounted(() => {
     lang.value = savedLang
   }
   window.addEventListener('click', onClickOutside)
+  loadFirmwareFromQuery()
 })
 
 onBeforeUnmount(() => {
@@ -1627,6 +1702,22 @@ onBeforeUnmount(() => {
                     </label>
                   </div>
 
+                  <!-- Load a firmware from a URL -->
+                  <form class="url-row" @submit.prevent="submitUrl">
+                    <input
+                      v-model="urlInput"
+                      type="url"
+                      class="custom-input mono-font"
+                      placeholder="https://.../firmware.bin"
+                      spellcheck="false"
+                      :aria-label="lang === 'pt' ? 'URL do firmware' : 'Firmware URL'"
+                    />
+                    <button type="submit" class="tool-btn" :disabled="!urlInput.trim() || urlLoading">
+                      <span v-if="urlLoading" class="spinner"></span>
+                      <span>{{ lang === 'pt' ? 'Carregar URL' : 'Load URL' }}</span>
+                    </button>
+                  </form>
+
                   <!-- Selected files, each with its own flash address -->
                   <div v-if="firmwareFiles.length" class="firmware-list">
                     <div v-for="item in firmwareFiles" :key="item.id" class="firmware-row">
@@ -1669,7 +1760,10 @@ onBeforeUnmount(() => {
                     </datalist>
                     <div class="firmware-summary">
                       <span>{{ firmwareFiles.length }} {{ lang === 'pt' ? 'ficheiro(s)' : 'file(s)' }} · {{ firmwareTotalSize }}</span>
-                      <button type="button" class="link-btn" @click="clearFirmware">{{ lang === 'pt' ? 'Remover todos' : 'Remove all' }}</button>
+                      <span class="firmware-summary-actions">
+                        <button v-if="shareLink" type="button" class="link-btn share" @click="copyShareLink">{{ copiedLink ? (lang === 'pt' ? 'Link copiado ✓' : 'Link copied ✓') : (lang === 'pt' ? 'Copiar link de gravação' : 'Copy flash link') }}</button>
+                        <button type="button" class="link-btn" @click="clearFirmware">{{ lang === 'pt' ? 'Remover todos' : 'Remove all' }}</button>
+                      </span>
                     </div>
                     <p v-for="msg in firmwareIssues" :key="msg" class="form-hint issue">{{ msg }}</p>
                   </div>

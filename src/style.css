@@ -3191,3 +3191,20 @@ select option {
 .csv-editor:focus { outline: none; border-color: var(--border-focus); }
 
 .muted-offset { color: var(--text-muted); }
+
+/* ==========================================================================
+   FIRMWARE FROM URL
+   ========================================================================== */
+.url-row {
+  display: flex;
+  gap: 8px;
+}
+
+.url-row .custom-input { flex: 1; min-width: 0; }
+
+.firmware-summary-actions {
+  display: inline-flex;
+  gap: 14px;
+}
+
+.link-btn.share { color: var(--accent-emerald-light); }
