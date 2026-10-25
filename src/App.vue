@@ -2238,6 +2238,12 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
+
+        <footer class="studio-footer">
+          <span>&copy; 2026 joaquim.org</span>
+          <span class="footer-sep" aria-hidden="true">&middot;</span>
+          <a href="https://github.com/joaquimorg/esp32_web_prog/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+        </footer>
       </main>
     </div>
   </div>

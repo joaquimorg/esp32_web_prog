@@ -3219,3 +3219,23 @@ select option {
 }
 
 .url-row .custom-input:focus { outline: none; border-color: var(--border-focus); }
+
+/* Footer */
+.studio-footer {
+  margin-top: auto;
+  padding: 20px 24px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.studio-footer a {
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.studio-footer a:hover { color: var(--accent-emerald-light); text-decoration: underline; }
