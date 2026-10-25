@@ -35,8 +35,8 @@ const copiedMac = ref(false)
 
 // Firmware Flashing & Presets
 const firmware = ref(null)
-const firmwareSource = ref('presets') // 'custom' | 'presets'
-const selectedPresetId = ref('esp32_blink')
+const firmwareSource = ref('custom') // 'custom' | 'presets'
+const selectedPresetId = ref(null)
 const isDragging = ref(false)
 const flashAddress = ref('0x10000')
 const progress = ref(0)
