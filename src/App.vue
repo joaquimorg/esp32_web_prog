@@ -58,6 +58,9 @@ const flashFreq = ref('keep')
 const flashSize = ref('keep')
 const verifyAfterFlash = ref(true)
 const monitorAfterFlash = ref(true)
+// Boards without auto-reset wiring: the user holds BOOT/presses EN, so esptool must not toggle DTR/RTS
+const manualBoot = ref(false)
+const resetMode = () => (manualBoot.value ? 'no_reset' : 'default_reset')
 const showFlashOptions = ref(false)
 
 // Serial Console
@@ -419,7 +422,7 @@ async function detectBoardHardware(targetPort) {
     })
 
     // Detect chip with 3 sync attempts
-    await loader.detectChip('default_reset')
+    await loader.detectChip(resetMode())
 
     if (loader.chip) {
       const rawName = loader.chip.CHIP_NAME || 'ESP32'
@@ -454,7 +457,8 @@ async function detectBoardHardware(targetPort) {
     }
 
     // Reset board back to normal application mode
-    await loader.after('hard_reset').catch(() => {})
+    // In manual mode the chip must stay in download mode for the flash that follows
+    await loader.after(manualBoot.value ? 'no_reset' : 'hard_reset').catch(() => {})
     await transport.disconnect().catch(() => {})
   } catch (err) {
     addLog(lang.value === 'pt'
@@ -938,7 +942,7 @@ async function runWithLoader(task) {
     debugLogging: false
   })
   try {
-    const chipDesc = await loader.main()
+    const chipDesc = await loader.main(resetMode())
     setChipTarget(loader.chip?.CHIP_NAME || chipDesc)
     await task(loader, chipDesc)
     await loader.after('hard_reset')
@@ -1142,7 +1146,7 @@ const BAUD_RATES = [115200, 921600, 460800, 230400, 74880, 9600]
 const LINE_ENDINGS = lineEndingOptions.value.map(o => o.value)
 const persistedSettings = {
   baudRate, lineEnding, showTimestamps, autoScroll,
-  flashMode, flashFreq, flashSize, verifyAfterFlash, monitorAfterFlash
+  flashMode, flashFreq, flashSize, verifyAfterFlash, monitorAfterFlash, manualBoot
 }
 const settingValid = {
   baudRate: (v) => BAUD_RATES.includes(v),
@@ -1551,6 +1555,15 @@ onBeforeUnmount(() => {
                     </svg>
                   </div>
                   <p class="form-hint">{{ t.speedHint }}</p>
+                </div>
+
+                <!-- Manual download mode -->
+                <div class="form-group">
+                  <label class="check-row">
+                    <input type="checkbox" v-model="manualBoot" />
+                    <span>{{ lang === 'pt' ? 'Modo download manual (sem reset automático)' : 'Manual download mode (no auto-reset)' }}</span>
+                  </label>
+                  <p v-if="manualBoot" class="form-hint">{{ lang === 'pt' ? 'Antes de ligar ou gravar: mantenha BOOT premido, prima e solte EN/RST e depois solte BOOT. A ferramenta não vai mexer em DTR/RTS. No fim, prima EN para arrancar o programa.' : 'Before connecting or flashing: hold BOOT, tap EN/RST, then release BOOT. The tool will not touch DTR/RTS. When done, press EN to run the program.' }}</p>
                 </div>
 
                 <!-- Connect Button Inside Card -->
